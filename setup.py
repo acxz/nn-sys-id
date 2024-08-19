@@ -15,7 +15,7 @@ setuptools.setup(
     install_requires=[
         'argparse',
         'gpytorch',
-        'pytorch-lightning',
+        'lightning[pytorch-extra]',
         'torch',
     ],
 )

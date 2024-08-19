@@ -1,24 +1,23 @@
 """Multi Layer Perceptron Model."""
 
-import argparse
 from collections import OrderedDict
 
-import pytorch_lightning as pl
+import lightning as L
 
 import torch
 
 
 # pylint: disable=too-many-ancestors
-class MLPModel(pl.LightningModule):
-    """MLP Network."""
+class MLPModel(L.LightningModule):
 
-    def __init__(self, **kwargs):
+    def __init__(self, layer_dims='1 100 1', lr=0.001):
         """Initialize fully connected layers."""
         super().__init__()
 
-        self.save_hyperparameters()
+        self.layer_dims = layer_dims
+        self.lr = lr
 
-        layer_dims_list_str = self.hparams.layer_dims.split()
+        layer_dims_list_str = self.layer_dims.split()
         layer_dims = [int(layer_dim)
                       for layer_dim in layer_dims_list_str]
         mlp_layers = OrderedDict()
@@ -37,66 +36,40 @@ class MLPModel(pl.LightningModule):
         self.model = torch.nn.Sequential(mlp_layers)
 
     # pylint: disable=arguments-differ
-    def forward(self, input_):
-        """Compute prediction."""
-        return self.model(input_)
+    def forward(self, inputs):
+        return self.model(inputs)
 
     # pylint: disable=unused-argument
     def training_step(self, batch, batch_idx):
-        """Compute training loss."""
-        input_, target = batch
-        output = self(input_)
-
-        loss = torch.nn.functional.mse_loss(output, target)
-
-        return {'loss': loss}
+        inputs, targets = batch
+        outputs = self.model(inputs)
+        loss = torch.nn.functional.mse_loss(outputs, targets)
+        self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        return loss
 
     def configure_optimizers(self):
-        """Create optimizer."""
-        optimizer = torch.optim.Adam(
-            self.parameters(),
-            lr=self.hparams.learning_rate)
-
-        return optimizer
+        return super().configure_optimizers()
+        # optimizer = torch.optim.Adam(self.parameters())
+        # return optimizer
 
     # pylint: disable=unused-argument
     def validation_step(self, batch, batch_idx):
-        """Compute validation loss."""
-        input_, target = batch
-        output = self(input_)
-
-        loss = torch.nn.functional.mse_loss(output, target)
-
-        return {'val_loss': loss}
-
-    # pylint: disable=no-self-use
-    def validation_epoch_end(self, outputs):
-        """Record validation loss."""
-        avg_loss = torch.stack([x['val_loss'] for x in outputs]).mean()
-        self.log('avg_val_loss', avg_loss)
+        inputs, targets = batch
+        outputs = self.model(inputs)
+        loss = torch.nn.functional.mse_loss(outputs, targets)
+        self.log('val_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        return loss
 
     # pylint: disable=unused-argument
     def test_step(self, batch, batch_idx):
-        """Compute testing loss."""
-        input_, target = batch
-        output = self(input_)
+        inputs, targets = batch
+        outputs = self.model(inputs)
+        loss = torch.nn.functional.mse_loss(outputs, targets)
+        self.log('test_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        return loss
 
-        loss = torch.nn.functional.mse_loss(output, target)
-
-        return {'test_loss': loss}
-
-    def test_epoch_end(self, outputs):
-        """Record average test loss."""
-        avg_loss = torch.stack([x['test_loss'] for x in outputs]).mean()
-        self.log('avg_test_loss', avg_loss)
-
-    @ staticmethod
-    def add_model_specific_args(parent_parser):
-        """Parse model specific hyperparameters."""
-        parser = argparse.ArgumentParser(
-            parents=[parent_parser], add_help=False)
-        parser.add_argument('--layer_dims', type=str, required=True)
-        parser.add_argument('--learning_rate', type=float, default=1e-3)
-        parser.add_argument('--momentum_param', type=int, default=0)
-
-        return parser
+    # pylint: disable=unused-argument
+    def predict_step(self, batch, batch_idx):
+        inputs, targets = batch
+        outputs = self.model(inputs)
+        return outputs

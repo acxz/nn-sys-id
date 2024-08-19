@@ -7,7 +7,7 @@ from plotly.subplots import make_subplots
 
 def main():
     """Test model inference."""
-    filepath = 'mlp_example.onnx'
+    filepath = 'mlp.onnx'
     ort_session = onnxruntime.InferenceSession(filepath)
     input_name = ort_session.get_inputs()[0].name
     input_dim = 1
