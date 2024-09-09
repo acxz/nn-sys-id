@@ -14,7 +14,7 @@ def main():
     predict_input_data = torch.linspace(0, x_domain, samples).unsqueeze(1)
 
     # load model
-    pt_path = 'gp_example.pt'
+    pt_path = 'gp.pt'
     checkpoint = torch.load(pt_path)
     model_state_dict = checkpoint['model_state_dict']
     train_input_data = checkpoint['train_input_data']
@@ -37,8 +37,8 @@ def main():
 
     fig_simp.add_trace(
         go.Scatter(
-            x=model.hparams.train_input_data[:, 0],
-            y=model.hparams.train_output_data[:, 0],
+            x=model.train_input_data[:, 0],
+            y=model.train_output_data[:, 0],
             mode='markers',
             marker={
                 'size': 10,
@@ -133,8 +133,8 @@ def main():
 
     fig.add_trace(
         go.Scatter(
-            x=model.hparams.train_input_data[:, 0],
-            y=model.hparams.train_output_data[:, 0],
+            x=model.train_input_data[:, 0],
+            y=model.train_output_data[:, 0],
             mode='markers',
             marker={
                 'size': 10,
@@ -219,8 +219,8 @@ def main():
 
     fig.add_trace(
         go.Scatter(
-            x=model.hparams.train_input_data[:, 0],
-            y=model.hparams.train_output_data[:, 1],
+            x=model.train_input_data[:, 0],
+            y=model.train_output_data[:, 1],
             mode='markers',
             marker={
                 'size': 10,

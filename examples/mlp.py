@@ -45,9 +45,8 @@ class VectorDataModule(L.LightningDataModule):
         self.test_dataset = None
         self.predict_dataset = None
 
-        # Create data to fit a fully connected network
+        # Create data
         # TODO: is this best practice to create data inside of setup function?
-        # TODO: add predict dataloader step
         samples = 100000
         input_dim = 1
         output_dim = 3

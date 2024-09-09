@@ -1,10 +1,8 @@
 """Gaussian Process Model."""
 
-import argparse
-
 import gpytorch
 
-import pytorch_lightning as pl
+import lightning as L
 
 import torch
 
@@ -41,6 +39,7 @@ class BIMOEGP(gpytorch.models.ExactGP):
                 gpytorch.distributions.MultivariateNormal(mean, covar))
 
 
+# FIXME: may be used for torch jit tracing for model export
 class MeanVarModelWrapper(torch.nn.Module):
     """Wrapper class to output prediction model."""
 
@@ -56,23 +55,27 @@ class MeanVarModelWrapper(torch.nn.Module):
 
 
 # pylint: disable=too-many-ancestors
-class BIMOEGPModel(pl.LightningModule):
+class BIMOEGPModel(L.LightningModule):
     """batch independent multioutput exact gp model."""
 
-    def __init__(self, train_input_data, train_output_data, **kwargs):
+    def __init__(self, train_input_data, train_output_data):
         """Initialize gp model with mean and covar."""
         super().__init__()
 
-        self.save_hyperparameters()
+        # take in train dataloader as the input tbh
 
-        output_dim = self.hparams.train_output_data.shape[1]
+        self.train_input_data = train_input_data
+        self.train_output_data = train_output_data
+
+        output_dim = self.train_output_data.shape[1]
         self.likelihood = gpytorch.likelihoods.MultitaskGaussianLikelihood(
             num_tasks=output_dim)
 
-        self.bimoegp = BIMOEGP(self.hparams.train_input_data,
-                               self.hparams.train_output_data,
+        self.bimoegp = BIMOEGP(self.train_input_data,
+                               self.train_output_data,
                                self.likelihood)
 
+        # Why does the mll need the likelihood separately from the model (when the model already has a likelihood?)
         self.mll = gpytorch.mlls.ExactMarginalLogLikelihood(
             self.likelihood, self.bimoegp)
 
@@ -83,58 +86,35 @@ class BIMOEGPModel(pl.LightningModule):
 
     # pylint: disable=unused-argument
     def training_step(self, batch, batch_idx):
-        """Compute training loss."""
         input_, target = batch
         output = self(input_)
-
         loss = -self.mll(output, target)
-
-        return {'loss': loss}
+        self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        return loss
 
     def configure_optimizers(self):
-        """Create optimizer."""
-        optimizer = torch.optim.Adam(
-            self.parameters(),
-            lr=self.hparams.learning_rate)
-
+        #return super().configure_optimizers()
+        optimizer = torch.optim.Adam(self.parameters(), lr=0.832)
         return optimizer
 
     # pylint: disable=unused-argument
     def validation_step(self, batch, batch_idx):
-        """Compute validation loss."""
         input_, target = batch
         output = self(input_)
-
         loss = -self.mll(output, target)
-
-        return {'val_loss': loss}
-
-    # pylint: disable=no-self-use
-    def validation_epoch_end(self, outputs):
-        """Record validation loss."""
-        avg_loss = torch.stack([x['val_loss'] for x in outputs]).mean()
-        self.log('avg_val_loss', avg_loss)
+        self.log('val_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        return loss
 
     # pylint: disable=unused-argument
     def test_step(self, batch, batch_idx):
-        """Compute testing loss."""
         input_, target = batch
         output = self(input_)
-
         loss = -self.mll(output, target)
+        self.log('test_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        return loss
 
-        return {'test_loss': loss}
-
-    def test_epoch_end(self, outputs):
-        """Record average test loss."""
-        avg_loss = torch.stack([x['test_loss'] for x in outputs]).mean()
-        self.log('avg_test_loss', avg_loss)
-
-    @ staticmethod
-    def add_model_specific_args(parent_parser):
-        """Parse model specific hyperparameters."""
-        parser = argparse.ArgumentParser(
-            parents=[parent_parser], add_help=False)
-        parser.add_argument('--learning_rate', type=float, default=1e-3)
-
-        return parser
+    # pylint: disable=unused-argument
+    def predict_step(self, batch, batch_idx):
+        input_, target = batch
+        output = self(input_)
+        return output

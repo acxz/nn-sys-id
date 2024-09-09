@@ -1,13 +1,11 @@
 """Train a model from a training dataset."""
 
-import argparse
-import math
-
 import gpytorch
 
 import pl_utils as plu
 
-import pytorch_lightning as pl
+import lightning as L
+from lightning.pytorch.cli import LightningCLI
 
 import torch
 
@@ -31,22 +29,20 @@ class VectorDataset(torch.utils.data.Dataset):
 
 # pylint: disable=abstract-method
 # pylint: disable=too-many-instance-attributes
-class VectorDataModule(pl.core.datamodule.LightningDataModule):
+class VectorDataModule(L.LightningDataModule):
     """Data module to load train/val/test dataloaders."""
 
-    def __init__(self, hparams, data):
+    def __init__(self, num_workers=1, batch_size=1):
         """Initialze variables."""
         super().__init__()
-        self.save_hyperparameters(hparams)
 
+        self.num_workers = num_workers
+        self.batch_size = batch_size
+
+        # TODO: is this needed?
         # flag to ensure setup (i.e. random split) only happens once
         self.has_setup = False
 
-        self.data = data
-
-        self.train_dataset = None
-        self.val_dataset = None
-        self.test_dataset = None
 
     def setup(self, stage=None):
         """Create and assign splits."""
@@ -54,42 +50,83 @@ class VectorDataModule(pl.core.datamodule.LightningDataModule):
             return
         self.has_setup = True
 
+        self.train_dataset = None
+        self.val_dataset = None
+        self.test_dataset = None
+        self.predict_dataset = None
+
+        # TODO: is this best practice to create data inside of setup function?
+        # Create data to fit
+        # samples = 100000
+        # input_dim = 1
+        # output_dim = 3
+        # data = torch.empty(samples, input_dim + output_dim)
+
+        # time = torch.linspace(1, 5.7, samples)
+        # for sample_idx in range(samples):
+        #     data[sample_idx] = torch.Tensor([time[sample_idx],
+        #                                      torch.cos(2 * torch.pi *
+        #                                                time[sample_idx]),
+        #                                      torch.sin(2 * torch.pi *
+        #                                                time[sample_idx]),
+        #                                      time[sample_idx]])
+
+        # Create data to fit
+        torch.manual_seed(3)
+        samples = 100
+        noise_scale = 0.05
+        freq = 4 * torch.pi
+        x_domain = 1
+        input_data = torch.linspace(0, x_domain, samples).unsqueeze(1)
+        sin_output_data = torch.sin(input_data * freq) + \
+            torch.randn(input_data.size()) * noise_scale
+        cos_output_data = torch.cos(input_data * freq) + \
+            torch.randn(input_data.size()) * noise_scale
+        data = torch.cat([input_data, sin_output_data, cos_output_data],
+                                    1)
+        random_indices = torch.randperm(data.shape[0])
+        data = data[random_indices]
+        data = data[0:10]
+
         train_pct = 0.8
         test_pct = 0.1
 
-        samples = len(self.data)
-
+        samples = len(data)
         train_samples = int(train_pct * samples)
         test_samples = int(test_pct * samples)
         val_samples = samples - train_samples - test_samples
 
-        input_data, output_data = self._split_input_output_data(self.data)
+        input_data, output_data = self._split_input_output_data(data)
         vector_dataset = VectorDataset(input_data, output_data)
         self.train_dataset, self.val_dataset, self.test_dataset = \
             torch.utils.data.random_split(
                 vector_dataset, [train_samples, val_samples, test_samples])
+        self.predict_dataset = vector_dataset
 
-    def train_dataloader(self, *args, **kwargs):
-        """Create train dataloader."""
+    def train_dataloader(self):
         return torch.utils.data.DataLoader(
             dataset=self.train_dataset,
-            num_workers=self.hparams.data_num_workers,
+            num_workers=self.num_workers,
             # batch size must be the training dataset for GPs
             batch_size=len(self.train_dataset))
 
-    def val_dataloader(self, *args, **kwargs):
-        """Create val dataloader."""
+    def val_dataloader(self):
         return torch.utils.data.DataLoader(
             dataset=self.val_dataset,
-            num_workers=self.hparams.data_num_workers,
-            batch_size=self.hparams.eval_batch_size)
+            num_workers=self.num_workers,
+            batch_size=self.batch_size)
 
-    def test_dataloader(self, *args, **kwargs):
-        """Create test dataloader."""
+    def test_dataloader(self):
         return torch.utils.data.DataLoader(
             dataset=self.test_dataset,
-            num_workers=self.hparams.data_num_workers,
-            batch_size=self.hparams.eval_batch_size)
+            num_workers=self.num_workers,
+            batch_size=self.batch_size)
+
+    def predict_dataloader(self):
+        return torch.utils.data.DataLoader(
+            dataset=self.predict_dataset,
+            num_workers=self.num_workers,
+            batch_size=self.batch_size)
 
     @staticmethod
     def _split_input_output_data(data):
@@ -100,23 +137,31 @@ class VectorDataModule(pl.core.datamodule.LightningDataModule):
 
 
 # pylint: disable=too-many-locals
-def main():
-    """Initialize model and trainer to fit."""
-    parser = argparse.ArgumentParser()
+def cli_main():
+    #cli = LightningCLI(model_class=plu.models.gp.BIMOEGPModel, datamodule_class=VectorDataModule)
 
-    # Add program specific args from model
-    parser.add_argument('--eval_batch_size', type=int, default=1)
-    parser.add_argument('--data_num_workers', type=int, default=1)
+    # setup data module manually since it needs train_input/output_data during
+    # initialization, which also need to be the same ones used in training
+    data_module = VectorDataModule()
+    data_module.setup()
+    train_input_data, train_output_data = data_module.train_dataset[:]
 
-    # Add trainer specific args from model
-    parser = pl.Trainer.add_argparse_args(parser)
+    # create model
+    model = plu.models.gp.BIMOEGPModel(train_input_data,
+                                       train_output_data)
 
-    # Add model specific args from model
-    parser = plu.models.gp.BIMOEGPModel.add_model_specific_args(parser)
+    # train model
+    trainer = L.Trainer(max_epochs=50)
+    trainer.fit(model=model, train_dataloaders=data_module.train_dataloader())
 
-    program_args_list = ['--eval_batch_size', '1',
-                         '--data_num_workers', '4']
+    # export model
+    pt_filepath = 'gp.pt'
+    torch.save({'model_state_dict': model.state_dict(),
+                'train_input_data': train_input_data,
+                'train_output_data': train_output_data},
+               pt_filepath)
 
+"""
     training_args_list = ['--accelerator', 'auto',
                           '--accumulate_grad_batches', '1',
                           '--auto_lr_find', 'False',
@@ -129,57 +174,6 @@ def main():
                           '--enable_model_summary', 'True']
 
     model_args_list = ['--learning_rate', '0.832']
-
-    args_list = program_args_list + training_args_list + model_args_list
-
-    hparams_args = parser.parse_args(args_list)
-    hparams = vars(hparams_args)
-
-    # Create data to fit
-    torch.manual_seed(3)
-    samples = 100
-    noise_scale = 0.05
-    freq = 4 * math.pi
-    x_domain = 1
-    input_data = torch.linspace(0, x_domain, samples).unsqueeze(1)
-    sin_output_data = torch.sin(input_data * freq) + \
-        torch.randn(input_data.size()) * noise_scale
-    cos_output_data = torch.cos(input_data * freq) + \
-        torch.randn(input_data.size()) * noise_scale
-    sinusoidal_data = torch.cat([input_data, sin_output_data, cos_output_data],
-                                1)
-    random_indices = torch.randperm(sinusoidal_data.shape[0])
-    sinusoidal_data = sinusoidal_data[random_indices]
-    sinusoidal_data = sinusoidal_data[0:10]
-
-    # Construct lightning data module for the dataset
-    data_module = VectorDataModule(hparams_args, sinusoidal_data)
-
-    # setup data module manually since it needs train_input/output_data during
-    # initialization, which also need to be the same ones used in training
-    data_module.setup()
-    train_input_data, train_output_data = data_module.train_dataset[:]
-
-    # create model
-    model = plu.models.gp.BIMOEGPModel(train_input_data,
-                                       train_output_data,
-                                       **hparams)
-
-    # create trainer
-    trainer = pl.Trainer.from_argparse_args(hparams_args)
-
-    # train on data
-    trainer.fit(model, datamodule=data_module)
-
-    # test on data
-    trainer.test(model, datamodule=data_module)
-
-    # export model
-    pt_filepath = 'gp_example.pt'
-    torch.save({'model_state_dict': model.state_dict(),
-                'train_input_data': train_input_data,
-                'train_output_data': train_output_data},
-               pt_filepath)
 
     # export model in onnx
     # below does not work yet
@@ -200,7 +194,7 @@ def main():
 
     # traced_model = torch.jit.onnx(onnx_filepath, input_sample,
     #                          export_params=True)
-
+"""
 
 if __name__ == '__main__':
-    main()
+    cli_main()
