@@ -1,0 +1,3 @@
+idea: shark location prediction
+idea: marine weather prediction
+idea: shark attack prediction (safewaters.ai)

@@ -14,6 +14,8 @@ class BIMOEGP(gpytorch.models.ExactGP):
         """Initialize gp model with mean and covar."""
         super().__init__(train_input_data, train_output_data, likelihood)
 
+        ## TODO: ard_num_dims for separate lengthscale in input
+
         output_dim = train_output_data.size(dim=1)
         output_dim_torch = torch.Size([output_dim])
 
@@ -37,6 +39,38 @@ class BIMOEGP(gpytorch.models.ExactGP):
         return \
             gpytorch.distributions.MultitaskMultivariateNormal.from_batch_mvn(
                 gpytorch.distributions.MultivariateNormal(mean, covar))
+
+class MOEGP(gpytorch.models.ExactGP):
+    """multioutput/multitask exact gp model."""
+
+    def __init__(self, train_input_data, train_output_data, likelihood):
+        """Initialize gp model with mean and covar."""
+        super().__init__(train_input_data, train_output_data, likelihood)
+
+        output_dim = train_output_data.size(dim=1)
+        output_dim_torch = torch.Size([output_dim])
+
+        self.mean_module = \
+            gpytorch.means.MultitaskMean(gpytorch.means.ConstantMean(), num_tasks=output_dim)
+
+        ## ard_num_dim for input dims
+
+        # Types of visualizations with covariance
+        ## 2 input, 1 output (mean is a plane on 3d plot, variance is top and bottom plane)
+        ## 1 input, 2 output (mean is a line on 3d plot, variance is an elliptical)
+        self.covar_module = gpytorch.kernels.MultitaskKernel(gpytorch.kernels.RBFKernel(),
+                                                             num_tasks=output_dim)
+
+
+    # pylint: disable=arguments-differ
+    def forward(self, input_):
+        """Compute prediction."""
+        mean = self.mean_module(input_)
+        covar = self.covar_module(input_)
+
+        return \
+            gpytorch.distributions.MultitaskMultivariateNormal(mean, covar)
+
 
 
 # FIXME: may be used for torch jit tracing for model export
@@ -83,6 +117,71 @@ class BIMOEGPModel(L.LightningModule):
     def forward(self, input_):
         """Compute prediction."""
         return self.bimoegp(input_)
+
+    # pylint: disable=unused-argument
+    def training_step(self, batch, batch_idx):
+        input_, target = batch
+        output = self(input_)
+        loss = -self.mll(output, target)
+        self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        return loss
+
+    def configure_optimizers(self):
+        #return super().configure_optimizers()
+        optimizer = torch.optim.Adam(self.parameters(), lr=0.832)
+        return optimizer
+
+    # pylint: disable=unused-argument
+    def validation_step(self, batch, batch_idx):
+        input_, target = batch
+        output = self(input_)
+        loss = -self.mll(output, target)
+        self.log('val_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        return loss
+
+    # pylint: disable=unused-argument
+    def test_step(self, batch, batch_idx):
+        input_, target = batch
+        output = self(input_)
+        loss = -self.mll(output, target)
+        self.log('test_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        return loss
+
+    # pylint: disable=unused-argument
+    def predict_step(self, batch, batch_idx):
+        input_, target = batch
+        output = self(input_)
+        return output
+
+# pylint: disable=too-many-ancestors
+class MOEGPModel(L.LightningModule):
+    """multioutput/multitask exact gp model."""
+
+    def __init__(self, train_input_data, train_output_data):
+        """Initialize gp model with mean and covar."""
+        super().__init__()
+
+        # take in train dataloader as the input tbh
+
+        self.train_input_data = train_input_data
+        self.train_output_data = train_output_data
+
+        output_dim = self.train_output_data.shape[1]
+        self.likelihood = gpytorch.likelihoods.MultitaskGaussianLikelihood(
+            num_tasks=output_dim)
+
+        self.moegp = MOEGP(self.train_input_data,
+                               self.train_output_data,
+                               self.likelihood)
+
+        # Why does the mll need the likelihood separately from the model (when the model already has a likelihood?)
+        self.mll = gpytorch.mlls.ExactMarginalLogLikelihood(
+            self.likelihood, self.moegp)
+
+    # pylint: disable=arguments-differ
+    def forward(self, input_):
+        """Compute prediction."""
+        return self.moegp(input_)
 
     # pylint: disable=unused-argument
     def training_step(self, batch, batch_idx):
